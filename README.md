@@ -3,9 +3,32 @@
 An AI reading assistant for the reMarkable Paper Pro, integrated into the stock PDF viewer.
 Handwrite a question with the pen in a floating panel and read a typeset answer, grounded in the open document and your highlights.
 A companion service (a Mac during development, or Docker/Kubernetes for self-hosting) syncs documents, extracts text and highlights, and makes the LLM calls - by default through a claude.ai subscription, no API key.
-(A remarque is a small sketch in the margin of an engraving.)
 
 ## How it works
+
+```mermaid
+flowchart LR
+    subgraph tablet["reMarkable Paper Pro"]
+        panel["Remarque panel<br/>(QML, via XOVI + AppLoad)"]
+        docs["xochitl document store"]
+    end
+    subgraph server["Companion service<br/>(Mac / Docker / Kubernetes)"]
+        api["FastAPI server"]
+        state[("sqlite: history, sessions,<br/>quiz results, Anki decks")]
+    end
+    subgraph llm["LLM provider"]
+        cheap["Transcription model<br/>(cheap, vision)"]
+        strong["Answer model<br/>(persistent per-document session)"]
+    end
+    panel -->|"ink strokes as JSON"| api
+    api -->|"typeset answer, streamed"| panel
+    docs -->|"rsync over SSH<br/>(server pulls)"| api
+    api --> cheap
+    api --> strong
+    api --- state
+    api -.->|"optional"| anki["Anki via AnkiConnect,<br/>synced to AnkiWeb"]
+    api -.->|"optional"| obsidian["Obsidian vault<br/>(notes, digests)"]
+```
 
 The tablet app captures pen strokes and sends them to the server as JSON.
 The server pulls documents from the tablet via rsync over SSH, detects the currently open document, transcribes the ink with a cheap vision model, and answers with a strong model inside a persistent per-document session.
