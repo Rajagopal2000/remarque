@@ -1,17 +1,19 @@
-# reMarkable AI Reading Assistant
+# Remarque
 
-An AI assistant for the reMarkable Paper Pro, integrated into the stock PDF viewer.
+An AI reading assistant for the reMarkable Paper Pro, integrated into the stock PDF viewer.
 You handwrite a question with the pen in a floating panel, optionally scoped to text you highlighted, and read a typeset answer.
-A companion service on your Mac does document syncing, highlight extraction, and the LLM calls (Claude by default).
+A companion service (on a Mac for development, or in Kubernetes) does document syncing, highlight extraction, and the LLM calls - by default through a claude.ai subscription, no API key.
+(A remarque is a small sketch in the margin of an engraving.)
 
 ## Architecture
 
-- `server/` - Python FastAPI companion service on the Mac.
-  It pulls documents from the tablet via rsync over SSH, detects the currently open document, extracts PDF text (PyMuPDF) and smart-highlight text (rmscene), rasterizes handwriting strokes, and streams answers from Claude (or OpenAI).
+- `server/` - Python FastAPI companion service.
+  It pulls documents from the tablet via rsync over SSH, detects the currently open document, extracts PDF text (PyMuPDF) and smart-highlight text (rmscene), rasterizes handwriting strokes, and answers inside persistent per-document agent sessions (Claude Code or Codex subscriptions, Gemini experimental, or Anthropic/OpenAI-compatible APIs).
 - `device-app/` - QML-only AppLoad app that runs inside xochitl on the tablet (via XOVI + rm-appload).
   It captures pen strokes, sends them as JSON to the server, and shows the answer as paginated text.
-- `spike/` - M1 throwaway app that verifies the risky assumptions on the device: pen input reaching QML handlers, and HTTP reaching the Mac.
-- `scripts/` - build (Qt rcc via pyside6), deploy (scp), and desktop QML validation.
+- `spike/` - throwaway app that verifies the risky assumptions on the device: pen input reaching QML handlers, and HTTP reaching the server.
+- `scripts/` - build (Qt rcc via pyside6), deploy (scp), desktop QML validation, and a full desktop simulator.
+- `deploy/kubernetes/` - reference Helm chart to vendor into a GitOps repo (this repo never deploys).
 
 ## One-time device setup
 
@@ -33,9 +35,9 @@ The default provider is `claude-code`: it runs headless Claude Code under your c
 `PROVIDER=codex` works the same way with the codex CLI and a ChatGPT subscription.
 Alternatives: `gemini` (experimental, stateless), `claude` with an `ANTHROPIC_API_KEY`, or `openai` (with `OPENAI_BASE_URL` this also covers gateways like LiteLLM or OpenRouter).
 
-Every ask runs in two stages to save tokens: a cheap model (haiku by default) transcribes the handwriting, and the strong model answers.
+Every ask runs in two stages: one model transcribes the handwriting (sonnet by default; haiku or a local Ollama vision model are cheaper options), and the answer model responds.
 For `claude-code` and `codex`, answers run inside a persistent per-document session: the full document text is sent once when the session starts, follow-up questions send only the question plus page and highlight hints, and resumed turns are served mostly from prompt cache (which counts far less against subscription limits).
-Sessions expire after `SESSION_TTL_DAYS` (60) idle days; the tablet panel shows the current session and has a "New session" button to clear the context; per-ask token usage is shown in the status line.
+Sessions expire after `SESSION_TTL_DAYS` (730, i.e. 2 years) idle days, and a matching `cleanupPeriodDays` is passed to Claude Code so it does not prune session transcripts earlier; the tablet panel shows the current session and has a "New session" button to clear the context; per-ask token usage is shown in the status line.
 
 Daily-loop polish:
 
@@ -62,11 +64,10 @@ Other panel features:
   The deck is saved as `.apkg` (download at `/api/anki/<doc_id>.apkg`); with `ANKI_CONNECT_URL` set, notes are also pushed via AnkiConnect and synced to AnkiWeb (AnkiWeb has no official API; AnkiConnect is the sanctioned bridge).
   In the cluster this is automatic: the chart runs an Anki container (`chrislongros/anki-desktop`, KasmVNC + AnkiConnect) as a ClusterIP-only sidecar service holding your AnkiWeb login on its own PVC, and the server syncs down, adds notes, and syncs up on every deck.
   One-time setup after the first deploy: port-forward the web UI and log in to AnkiWeb (see `deploy/kubernetes/SECRETS.md`).
-- Sessions are retained for 2 years of idle time by default (`SESSION_TTL_DAYS=730`); a matching `cleanupPeriodDays` is passed to Claude Code so it does not prune the session transcripts earlier.
 
 Run the tests with `uv run pytest`.
 
-## Running in Kubernetes (Project-Maya homelab)
+## Running in Kubernetes
 
 The server can run in the cluster instead of a Mac; the cluster and tablet share the LAN, which is the one hard requirement (the pod SSHes to the tablet, the tablet HTTPs to the pod).
 
@@ -108,19 +109,20 @@ uvx --from pyside6-essentials python scripts/simulator.py --test --server-url ht
 
 ## Deploying the apps to the tablet
 
-`SERVER_URL` must be the URL of your Mac as seen from the tablet (give your Mac a DHCP reservation).
+`SERVER_URL` is the server as seen from the tablet: the Mac's LAN IP during development, or the MetalLB `serviceIP` in the cluster.
+`API_TOKEN` must match the server's token (omit both only in tokenless local development).
 
 ```bash
-# M1 spike first: verifies pen input + networking inside an AppLoad window
-SERVER_URL=http://<mac-ip>:8000 DEVICE_HOST=<tablet-ip> ./scripts/deploy-app.sh spike
+# Spike first: verifies pen input + networking inside an AppLoad window
+SERVER_URL=http://<server-ip>:8000 DEVICE_HOST=<tablet-ip> ./scripts/deploy-app.sh spike
 
 # The real assistant
-SERVER_URL=http://<mac-ip>:8000 DEVICE_HOST=<tablet-ip> ./scripts/deploy-app.sh device-app
+SERVER_URL=http://<server-ip>:8000 API_TOKEN=<token> DEVICE_HOST=<tablet-ip> ./scripts/deploy-app.sh device-app
 ```
 
 On the tablet: open a PDF, open the AppLoad menu, and long-press the app icon to launch it windowed over the document.
 
-## M1 spike verification checklist
+## Spike verification checklist (first time on the device)
 
 1. Launch "AI Pen Spike" windowed over an open PDF.
 2. Write with the pen in each of the three strips; note which ones show ink and what the log line reports.
