@@ -67,6 +67,22 @@ Other panel features:
 
 Run the tests with `uv run pytest`.
 
+## Running with Docker Compose
+
+The simplest self-hosted setup: one container, state in a named volume.
+
+```bash
+cd server && cp .env.example .env
+# in server/.env set at least:
+#   CLAUDE_CODE_OAUTH_TOKEN (from: claude setup-token)
+#   RM_HOST (tablet LAN IP), API_TOKEN
+cd .. && docker compose up -d
+```
+
+The tablet then talks to `http://<host-ip>:8000`.
+To sync documents from the tablet, uncomment the SSH-key mount in `compose.yaml` (the startup command fixes the key permissions ssh requires).
+Optional profiles: `--profile anki` runs the in-container Anki for AnkiWeb sync (log in once at `http://localhost:3000`), and `--profile ollama` runs a local vision model for transcription; the env settings each needs are listed at the top of `compose.yaml`.
+
 ## Running in Kubernetes
 
 The server can run in the cluster instead of a Mac; the cluster and tablet share the LAN, which is the one hard requirement (the pod SSHes to the tablet, the tablet HTTPs to the pod).
