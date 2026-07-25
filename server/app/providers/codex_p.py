@@ -69,13 +69,14 @@ class CodexProvider:
     name = "codex"
     supports_sessions = True
 
-    def transcribe(self, ink_png: bytes) -> str:
+    def transcribe(self, ink_png: bytes, strong: bool = False) -> str:
         with tempfile.TemporaryDirectory(prefix="remarque-ink-") as tmpdir:
             image_path = Path(tmpdir) / "ink.png"
             image_path.write_bytes(ink_png)
             args = [*BASE_FLAGS, "--ephemeral", "-i", str(image_path)]
-            if settings.codex_transcribe_model:
-                args += ["-m", settings.codex_transcribe_model]
+            model = settings.codex_model if strong else settings.codex_transcribe_model
+            if model:
+                args += ["-m", model]
             args.append(TRANSCRIBE_SYSTEM + "\nTranscribe the handwriting in the attached image.")
             parts = [payload for kind, payload in _events(_run(args)) if kind == "text"]
             return str(parts[-1]).strip() if parts else "[illegible]"

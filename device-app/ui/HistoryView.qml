@@ -29,7 +29,10 @@ Rectangle {
                     lastDay = day;
                 }
             }
-            out.push((t.role === "user" ? "You: " : "AI: ") + t.content);
+            var who = t.role === "user" ? "You" : "AI";
+            if (t.role === "user" && t.page)
+                who += " (p." + t.page + ")";
+            out.push(who + ": " + t.content);
         }
         return out.join("\n\n");
     }

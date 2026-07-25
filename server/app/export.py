@@ -9,6 +9,7 @@ not restart xochitl ourselves: the assistant panel runs inside it.
 import html
 import io
 import json
+import re
 import subprocess
 import tempfile
 import time
@@ -54,6 +55,52 @@ def build_notes_pdf(title: str, turns: list[dict]) -> bytes:
         writer.end_page()
     writer.close()
     return buf.getvalue()
+
+
+def build_notes_markdown(title: str, turns: list[dict], highlights: list[dict] | None = None) -> str:
+    """Markdown reading notes: frontmatter, highlights, then the Q&A history."""
+    lines = [
+        "---",
+        f'title: "Reading notes: {title.replace(chr(34), chr(39))}"',
+        f"date: {datetime.now().strftime('%Y-%m-%d')}",
+        "tags: [remarque]",
+        "---",
+        "",
+        f"# {title}",
+    ]
+    if highlights:
+        lines += ["", "## Highlights", ""]
+        for h in highlights:
+            for t in h["texts"]:
+                lines.append(f"- (p. {h['page_index'] + 1}) {t}")
+    lines += ["", "## Questions and answers"]
+    last_day = ""
+    for turn in turns:
+        if turn.get("ts"):
+            day = datetime.fromtimestamp(turn["ts"]).strftime("%Y-%m-%d")
+            if day != last_day:
+                lines += ["", f"### {day}"]
+                last_day = day
+        if turn["role"] == "user":
+            page = f" *(p. {turn['page']})*" if turn.get("page") else ""
+            lines += ["", f"**Q: {turn['content']}**{page}", ""]
+        else:
+            lines.append(turn["content"])
+    return "\n".join(lines) + "\n"
+
+
+def _safe_name(title: str) -> str:
+    name = re.sub(r'[\\/:*?"<>|]', "-", title).strip(" -.")
+    return name or "untitled"
+
+
+def write_to_obsidian(title: str, markdown: str) -> Path:
+    """Write (or overwrite) the note in the configured vault folder."""
+    vault = Path(settings.obsidian_dir).expanduser()
+    vault.mkdir(parents=True, exist_ok=True)
+    path = vault / f"{_safe_name(title)}.md"
+    path.write_text(markdown)
+    return path
 
 
 def push_to_tablet(pdf_bytes: bytes, visible_name: str) -> str:

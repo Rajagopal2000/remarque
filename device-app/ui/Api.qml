@@ -6,9 +6,11 @@ Item {
     property string serverUrl: ""
     property string apiToken: ""
     property bool busy: false
+    property bool searching: false
     property string jobId: ""
     property int cursor: 0
 
+    signal searchResults(var data)
     signal refreshed(var data)
     signal refreshFailed(string message)
     signal sessionCleared(var data)
@@ -41,7 +43,7 @@ Item {
         xhr.send();
     }
 
-    function _post(path, body, onOk, onErr) {
+    function _post(path, body, onOk, onErr, timeoutMs) {
         var xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== XMLHttpRequest.DONE)
@@ -55,13 +57,15 @@ Item {
         xhr.setRequestHeader("Content-Type", "application/json");
         if (apiToken !== "")
             xhr.setRequestHeader("X-Api-Token", apiToken);
-        xhr.timeout = 120000;
+        xhr.timeout = timeoutMs !== undefined ? timeoutMs : 120000;
         xhr.send(body !== null ? JSON.stringify(body) : "");
     }
 
     function refresh() {
-        _get("/api/refresh", function(data) { api.refreshed(data); },
-             function(msg) { api.refreshFailed(msg); });
+        // Short timeout: a wedged server must show as unreachable quickly,
+        // not leave the panel blank for the two-minute job timeout.
+        _post("/api/refresh", null, function(data) { api.refreshed(data); },
+              function(msg) { api.refreshFailed(msg); }, 15000);
     }
 
     function fetchHistory(docId) {
@@ -75,7 +79,7 @@ Item {
               function(msg) { api.failed("clear failed: " + msg); });
     }
 
-    function ask(strokes, canvasW, canvasH, includeHighlights, includeDocText, brief) {
+    function ask(strokes, canvasW, canvasH, includeHighlights, includeDocText, brief, strongTranscribe) {
         if (busy)
             return;
         busy = true;
@@ -87,7 +91,8 @@ Item {
             "canvas_h": canvasH,
             "include_highlights": includeHighlights,
             "include_doc_text": includeDocText,
-            "brief": brief === true
+            "brief": brief === true,
+            "strong_transcribe": strongTranscribe === true
         }, function(resp) {
             api.jobId = resp.job_id;
             api.syncAge(resp.sync_age_seconds);
@@ -118,6 +123,62 @@ Item {
         });
     }
 
+    function quizStart(docId) {
+        if (busy)
+            return;
+        busy = true;
+        jobId = "";
+        cursor = 0;
+        _post("/api/quiz", {
+            "doc_id": docId !== "" ? docId : null
+        }, function(resp) {
+            api.jobId = resp.job_id;
+            api.syncAge(resp.sync_age_seconds);
+            pollTimer.start();
+        }, function(msg) {
+            api.busy = false;
+            api.failed(msg);
+        });
+    }
+
+    function quizAnswer(strokes, canvasW, canvasH, docId) {
+        if (busy)
+            return;
+        busy = true;
+        jobId = "";
+        cursor = 0;
+        _post("/api/quiz/answer", {
+            "strokes": strokes,
+            "canvas_w": canvasW,
+            "canvas_h": canvasH,
+            "doc_id": docId !== "" ? docId : null
+        }, function(resp) {
+            api.jobId = resp.job_id;
+            api.syncAge(resp.sync_age_seconds);
+            pollTimer.start();
+        }, function(msg) {
+            api.busy = false;
+            api.failed(msg);
+        });
+    }
+
+    function search(strokes, canvasW, canvasH) {
+        if (busy || searching)
+            return;
+        searching = true;
+        _post("/api/search", {
+            "strokes": strokes,
+            "canvas_w": canvasW,
+            "canvas_h": canvasH
+        }, function(data) {
+            api.searching = false;
+            api.searchResults(data);
+        }, function(msg) {
+            api.searching = false;
+            api.failed("search failed: " + msg);
+        });
+    }
+
     function cancel() {
         if (jobId === "")
             return;
@@ -136,6 +197,21 @@ Item {
         jobId = "";
         cursor = 0;
         _post("/api/anki/" + docId, null, function(resp) {
+            api.jobId = resp.job_id;
+            pollTimer.start();
+        }, function(msg) {
+            api.busy = false;
+            api.failed(msg);
+        });
+    }
+
+    function compactSession(docId) {
+        if (busy)
+            return;
+        busy = true;
+        jobId = "";
+        cursor = 0;
+        _post("/api/session/" + docId + "/compact", null, function(resp) {
             api.jobId = resp.job_id;
             pollTimer.start();
         }, function(msg) {

@@ -22,10 +22,10 @@ class OpenAIProvider:
         kwargs = {"base_url": settings.openai_base_url} if settings.openai_base_url else {}
         self._client = OpenAI(**kwargs)
 
-    def transcribe(self, ink_png: bytes) -> str:
+    def transcribe(self, ink_png: bytes, strong: bool = False) -> str:
         url = f"data:image/png;base64,{base64.standard_b64encode(ink_png).decode()}"
         response = self._client.chat.completions.create(
-            model=settings.openai_transcribe_model,
+            model=settings.openai_model if strong else settings.openai_transcribe_model,
             messages=[
                 {"role": "system", "content": TRANSCRIBE_SYSTEM},
                 {

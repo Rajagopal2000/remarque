@@ -66,6 +66,16 @@ class Settings:
     # Optional AnkiConnect endpoint (Anki desktop + AnkiConnect plugin); when set,
     # generated decks are pushed there and a sync to AnkiWeb is triggered.
     anki_connect_url: str = os.environ.get("ANKI_CONNECT_URL", "")
+    # Optional folder inside an Obsidian vault; when set, notes export also
+    # writes a markdown note per document there.
+    obsidian_dir: str = os.environ.get("OBSIDIAN_DIR", "")
+    # Refresh existing Anki decks incrementally every N hours (0 disables).
+    # Only documents whose deck was created once (Anki button) are updated,
+    # and unchanged documents skip the LLM entirely.
+    anki_auto_hours: float = float(os.environ.get("ANKI_AUTO_HOURS", "0"))
+    # Write a reading digest note into OBSIDIAN_DIR every N days (0 disables;
+    # needs OBSIDIAN_DIR). Deterministic: no LLM call involved.
+    digest_every_days: float = float(os.environ.get("DIGEST_EVERY_DAYS", "0"))
     agent_home: Path = field(
         default_factory=lambda: Path(os.environ.get("AGENT_HOME", DATA_DIR / "agent-home"))
     )

@@ -23,6 +23,8 @@ Rectangle {
     property string docTextMode: "none"   // none | page | full | image (extra context per ask)
     property var lastAction: null
     property bool canRetry: false
+    property bool canReread: false
+    property bool quizPending: false
     property int elapsedS: 0
 
     Timer {
@@ -58,8 +60,18 @@ Rectangle {
         root.usageLabel = "";
         root.staleNote = "";
         root.canRetry = false;
+        root.canReread = false;
         root.elapsedS = 0;
         root.status = label;
+    }
+
+    // The transcription was off: same strokes, read by the answer model instead.
+    function reread() {
+        var a = root.lastAction;
+        if (!a || a.kind !== "ask")
+            return;
+        root.startAction("Re-reading with the answer model...");
+        api.ask(a.strokes, a.w, a.h, root.includeHighlights, root.docTextMode, root.brief, true);
     }
 
     function retry() {
@@ -72,6 +84,22 @@ Rectangle {
         } else if (a.kind === "quick") {
             root.startAction("Thinking...");
             api.quick(a.action, root.docId, root.brief);
+        } else if (a.kind === "search") {
+            root.status = "Searching...";
+            root.canRetry = false;
+            api.search(a.strokes, a.w, a.h);
+        } else if (a.kind === "quizstart") {
+            root.startAction("Thinking of a question...");
+            api.quizStart(root.docId);
+        } else if (a.kind === "quizanswer") {
+            root.startAction("Reading handwriting...");
+            api.quizAnswer(a.strokes, a.w, a.h, root.docId);
+        } else if (a.kind === "anki") {
+            root.startAction("Creating Anki deck...");
+            api.anki(root.docId !== "" ? root.docId : "__no_document__");
+        } else if (a.kind === "compact") {
+            root.startAction("Compacting session...");
+            api.compactSession(root.docId !== "" ? root.docId : "__no_document__");
         }
     }
 
@@ -85,19 +113,30 @@ Rectangle {
         id: api
         serverUrl: config.serverUrl
         apiToken: config.apiToken
-        onExported: (data) => root.status = data.pushed
-            ? "Notes on tablet: restart device to see them"
-            : "Notes exported"
+        onExported: (data) => {
+            root.status = (data.pushed
+                ? "Notes on tablet: restart device to see them"
+                : "Notes exported")
+                + (data.obsidian_path ? " · saved to Obsidian" : "");
+        }
         onRefreshed: (data) => {
             root.docTitle = data.title || "";
             root.docId = data.doc_id || "";
             root.sessionLabel = root.describeSession(data.session);
-            root.status = "Ready";
+            root.status = data.sync_error
+                ? "Sync failed, showing last-synced data"
+                : "Ready";
         }
         onRefreshFailed: (msg) => root.status = "No document: " + msg
         onHistoryLoaded: (turns) => historyView.open(turns)
+        onSearchResults: (data) => {
+            scratchpad.clearInk();
+            root.status = "Search: " + data.query;
+            searchView.open(data);
+        }
         onSessionCleared: (data) => {
             root.sessionLabel = "Session: new";
+            root.quizPending = false;
             root.status = "Context cleared, next question starts fresh";
         }
         onPhaseChanged: (phase) => {
@@ -118,8 +157,21 @@ Rectangle {
                 root.staleNote = "using data synced " + root.formatAge(age) + " ago";
         }
         onCancelled: root.status = "Stopped"
-        onFinished: root.status = root.questionRead !== "" ? "Q: " + root.questionRead : "Done"
+        onFinished: {
+            if (root.lastAction && root.lastAction.kind === "quizstart") {
+                root.quizPending = true;
+                root.status = "Quiz: handwrite your answer, then tap Answer";
+            } else if (root.lastAction && root.lastAction.kind === "quizanswer") {
+                root.quizPending = false;
+                root.status = "Quiz graded";
+            } else {
+                root.status = root.questionRead !== "" ? "Q: " + root.questionRead : "Done";
+                root.canReread = root.lastAction !== null && root.lastAction.kind === "ask";
+            }
+        }
         onFailed: (msg) => {
+            if (root.lastAction && root.lastAction.kind === "quizanswer")
+                root.quizPending = false;
             root.status = "Error: " + msg;
             root.canRetry = root.lastAction !== null;
         }
@@ -170,7 +222,7 @@ Rectangle {
                 radius: 6
                 Text {
                     anchors.centerIn: parent
-                    text: api.busy ? "Stop" : "Ask"
+                    text: api.busy ? "Stop" : (root.quizPending ? "Answer" : "Ask")
                     color: api.busy ? "black" : (!scratchpad.hasInk ? "#888888" : "white")
                     font.pixelSize: 24
                     font.bold: true
@@ -185,6 +237,13 @@ Rectangle {
                             return;
                         }
                         var strokes = scratchpad.strokesForJson();
+                        if (root.quizPending) {
+                            root.lastAction = { "kind": "quizanswer", "strokes": strokes,
+                                                "w": scratchpad.width, "h": scratchpad.height };
+                            root.startAction("Reading handwriting...");
+                            api.quizAnswer(strokes, scratchpad.width, scratchpad.height, root.docId);
+                            return;
+                        }
                         root.lastAction = { "kind": "ask", "strokes": strokes,
                                             "w": scratchpad.width, "h": scratchpad.height };
                         root.startAction("Reading handwriting...");
@@ -210,7 +269,30 @@ Rectangle {
                 MouseArea { anchors.fill: parent; onClicked: scratchpad.clearInk() }
             }
             Rectangle {
-                width: 150; height: 44
+                width: 110; height: 44
+                border.width: 2; radius: 6
+                color: (!scratchpad.hasInk || api.searching) ? "#dddddd" : "white"
+                Text {
+                    anchors.centerIn: parent
+                    text: "Search"
+                    color: (!scratchpad.hasInk || api.searching) ? "#888888" : "black"
+                    font.pixelSize: 20
+                }
+                MouseArea {
+                    objectName: "searchButton"
+                    anchors.fill: parent
+                    enabled: !api.busy && !api.searching && scratchpad.hasInk
+                    onClicked: {
+                        root.lastAction = { "kind": "search", "strokes": scratchpad.strokesForJson(),
+                                            "w": scratchpad.width, "h": scratchpad.height };
+                        root.canRetry = false;
+                        root.status = "Searching...";
+                        api.search(root.lastAction.strokes, root.lastAction.w, root.lastAction.h);
+                    }
+                }
+            }
+            Rectangle {
+                width: 100; height: 44
                 border.width: 2; radius: 6
                 color: root.includeHighlights ? "#e8e8e8" : "white"
                 Text {
@@ -224,7 +306,7 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: 150; height: 44
+                width: 140; height: 44
                 border.width: 2; radius: 6
                 Text { anchors.centerIn: parent; text: "Attach: " + root.docTextMode; font.pixelSize: 18 }
                 MouseArea {
@@ -241,7 +323,7 @@ Rectangle {
         component QuickButton: Rectangle {
             property string label: ""
             property string action: ""
-            width: (parent.width - 50) / 6
+            width: (parent.width - 60) / 7
             height: 40
             border.width: 2; radius: 6
             opacity: api.busy ? 0.4 : 1
@@ -266,7 +348,25 @@ Rectangle {
             QuickButton { label: "Explain HL"; action: "explain_highlights" }
             QuickButton { label: "Define HL"; action: "define_highlight" }
             Rectangle {
-                width: (parent.width - 50) / 6
+                width: (parent.width - 60) / 7
+                height: 40
+                border.width: 2; radius: 6
+                color: root.quizPending ? "#e8e8e8" : "white"
+                opacity: api.busy ? 0.4 : 1
+                Text { anchors.centerIn: parent; text: "Quiz"; font.pixelSize: 18 }
+                MouseArea {
+                    objectName: "quizButton"
+                    anchors.fill: parent
+                    enabled: !api.busy
+                    onClicked: {
+                        root.lastAction = { "kind": "quizstart" };
+                        root.startAction("Thinking of a question...");
+                        api.quizStart(root.docId);
+                    }
+                }
+            }
+            Rectangle {
+                width: (parent.width - 60) / 7
                 height: 40
                 border.width: 2; radius: 6
                 opacity: api.busy ? 0.4 : 1
@@ -276,13 +376,14 @@ Rectangle {
                     anchors.fill: parent
                     enabled: !api.busy
                     onClicked: {
+                        root.lastAction = { "kind": "anki" };
                         root.startAction("Creating Anki deck...");
                         api.anki(root.docId !== "" ? root.docId : "__no_document__");
                     }
                 }
             }
             Rectangle {
-                width: (parent.width - 50) / 6
+                width: (parent.width - 60) / 7
                 height: 40
                 border.width: 2; radius: 6
                 opacity: api.busy ? 0.4 : 1
@@ -316,7 +417,7 @@ Rectangle {
                 text: root.sessionLabel !== "" ? root.sessionLabel : "Session: -"
                 font.pixelSize: 19
                 color: "#555555"
-                width: parent.width - 440
+                width: parent.width - 580
                 anchors.verticalCenter: parent.verticalCenter
                 elide: Text.ElideRight
             }
@@ -343,6 +444,24 @@ Rectangle {
                 }
             }
             Rectangle {
+                width: 130; height: 38
+                border.width: 2; radius: 6
+                visible: root.sessionLabel !== ""
+                opacity: api.busy ? 0.4 : 1
+                anchors.verticalCenter: parent.verticalCenter
+                Text { anchors.centerIn: parent; text: "Compact"; font.pixelSize: 19 }
+                MouseArea {
+                    objectName: "compactButton"
+                    anchors.fill: parent
+                    enabled: !api.busy
+                    onClicked: {
+                        root.lastAction = { "kind": "compact" };
+                        root.startAction("Compacting session...");
+                        api.compactSession(root.docId !== "" ? root.docId : "__no_document__");
+                    }
+                }
+            }
+            Rectangle {
                 width: 170; height: 38
                 border.width: 2; radius: 6
                 anchors.verticalCenter: parent.verticalCenter
@@ -363,6 +482,7 @@ Rectangle {
             Text {
                 objectName: "statusText"
                 width: parent.width - (root.canRetry ? 120 : 0)
+                      - (root.canReread && !api.busy ? 130 : 0)
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.status
                       + (api.busy && root.elapsedS > 2 ? "   " + root.elapsedS + "s" : "")
@@ -371,6 +491,18 @@ Rectangle {
                 font.pixelSize: 19
                 color: "#555555"
                 elide: Text.ElideRight
+            }
+            Rectangle {
+                width: 120; height: 36
+                visible: root.canReread && !api.busy
+                border.width: 2; radius: 6
+                anchors.verticalCenter: parent.verticalCenter
+                Text { anchors.centerIn: parent; text: "Re-read"; font.pixelSize: 19 }
+                MouseArea {
+                    objectName: "rereadButton"
+                    anchors.fill: parent
+                    onClicked: root.reread()
+                }
             }
             Rectangle {
                 width: 110; height: 36
@@ -390,6 +522,13 @@ Rectangle {
     HistoryView {
         id: historyView
         objectName: "historyView"
+        anchors.fill: parent
+        z: 10
+    }
+
+    SearchView {
+        id: searchView
+        objectName: "searchView"
         anchors.fill: parent
         z: 10
     }

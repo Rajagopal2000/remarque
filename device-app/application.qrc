@@ -6,5 +6,6 @@
         <file>ui/Scratchpad.qml</file>
         <file>ui/AnswerView.qml</file>
         <file>ui/HistoryView.qml</file>
+        <file>ui/SearchView.qml</file>
     </qresource>
 </RCC>

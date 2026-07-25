@@ -47,7 +47,7 @@ class ClaudeCodeProvider:
 
     # -- transcription (cheap model, one shot) --
 
-    def transcribe(self, ink_png: bytes) -> str:
+    def transcribe(self, ink_png: bytes, strong: bool = False) -> str:
         with tempfile.TemporaryDirectory(prefix="remarque-ink-") as tmpdir:
             image_path = Path(tmpdir) / "ink.png"
             image_path.write_bytes(ink_png)
@@ -64,7 +64,7 @@ class ClaudeCodeProvider:
                     system_prompt=TRANSCRIBE_SYSTEM,
                     allowed_tools=["Read"],
                     max_turns=3,
-                    model=settings.claude_code_transcribe_model,
+                    model=settings.claude_code_model if strong else settings.claude_code_transcribe_model,
                     cwd=tmpdir,
                 )
                 parts: list[str] = []

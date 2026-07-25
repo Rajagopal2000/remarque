@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import genanki
@@ -27,6 +27,9 @@ class DeckState:
     last_history_ts: float
     highlight_texts: list[str]
     doc_text_hash: str
+    # None marks a deck saved before margin tracking existed: those notes are
+    # treated as already covered, not as new material to generate cards for.
+    margin_texts: list[str] | None = field(default_factory=list)
 
 
 class AnkiStateStore:
@@ -41,6 +44,11 @@ class AnkiStateStore:
                 "last_history_ts REAL NOT NULL, highlight_texts TEXT NOT NULL,"
                 "doc_text_hash TEXT NOT NULL, cards TEXT NOT NULL)"
             )
+            cols = [row[1] for row in conn.execute("PRAGMA table_info(anki_decks)")]
+            if "margin_texts" not in cols:
+                # Nullable on purpose: existing rows get NULL ("unknown"), not
+                # an empty list that would count every old note as new.
+                conn.execute("ALTER TABLE anki_decks ADD COLUMN margin_texts TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path)
@@ -48,18 +56,24 @@ class AnkiStateStore:
     def get(self, doc_id: str) -> DeckState | None:
         with _lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT cards, last_history_ts, highlight_texts, doc_text_hash "
+                "SELECT cards, last_history_ts, highlight_texts, doc_text_hash, margin_texts "
                 "FROM anki_decks WHERE doc_id = ?",
                 (doc_id,),
             ).fetchone()
         if row is None:
             return None
-        return DeckState(json.loads(row[0]), row[1], json.loads(row[2]), row[3])
+        return DeckState(
+            json.loads(row[0]),
+            row[1],
+            json.loads(row[2]),
+            row[3],
+            json.loads(row[4]) if row[4] is not None else None,
+        )
 
     def save(self, doc_id: str, state: DeckState) -> None:
         with _lock, self._connect() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO anki_decks VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO anki_decks VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     doc_id,
                     time.time(),
@@ -67,8 +81,21 @@ class AnkiStateStore:
                     json.dumps(state.highlight_texts),
                     state.doc_text_hash,
                     json.dumps(state.cards),
+                    json.dumps(state.margin_texts),
                 ),
             )
+
+    def doc_ids(self) -> list[str]:
+        with _lock, self._connect() as conn:
+            return [r[0] for r in conn.execute("SELECT doc_id FROM anki_decks")]
+
+    def updated_since(self, ts: float) -> list[dict]:
+        """Decks touched from ts onward, with their total size (for the digest)."""
+        with _lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT doc_id, cards FROM anki_decks WHERE updated_at >= ?", (ts,)
+            ).fetchall()
+        return [{"doc_id": d, "n_cards": len(json.loads(cards))} for d, cards in rows]
 
     def clear(self, doc_id: str) -> None:
         with _lock, self._connect() as conn:
@@ -138,6 +165,7 @@ def generate_cards(
     doc_text: str | None,
     turns: list[dict],
     highlights: list[str] | None = None,
+    margin_notes: list[str] | None = None,
     existing_fronts: list[str] | None = None,
     update_only: bool = False,
 ) -> list[dict]:
@@ -148,6 +176,12 @@ def generate_cards(
         parts.append(
             "Passages the user highlighted (important to them; make sure these are covered):\n"
             + "\n".join(f"- {h}" for h in highlights)
+        )
+    if margin_notes:
+        parts.append(
+            "Notes the user handwrote in the margins (transcribed; they mark what "
+            "mattered to the user, make sure it is covered):\n"
+            + "\n".join(f"- {m}" for m in margin_notes)
         )
     if turns:
         parts.append(

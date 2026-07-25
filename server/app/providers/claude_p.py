@@ -17,9 +17,9 @@ class ClaudeProvider:
     def __init__(self) -> None:
         self._client = anthropic.Anthropic()
 
-    def transcribe(self, ink_png: bytes) -> str:
+    def transcribe(self, ink_png: bytes, strong: bool = False) -> str:
         response = self._client.messages.create(
-            model=settings.anthropic_transcribe_model,
+            model=settings.anthropic_model if strong else settings.anthropic_transcribe_model,
             max_tokens=500,
             system=TRANSCRIBE_SYSTEM,
             messages=[

@@ -16,6 +16,8 @@ config:
   # Tablet's LAN IP (WiFi). Give the tablet a DHCP reservation.
   rmHost: 192.168.4.50
   sessionTtlDays: "730"
+  # Refresh existing Anki decks incrementally every N hours ("0" disables).
+  ankiAutoHours: "24"
 
 storage:
   size: 5Gi

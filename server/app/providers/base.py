@@ -1,7 +1,9 @@
 """Provider abstraction for the two-stage flow.
 
 Each provider offers:
-- transcribe(ink_png) -> question text, using its cheap model (stateless, one-shot)
+- transcribe(ink_png, strong=False) -> question text, using its cheap model
+  (stateless, one-shot); strong=True re-reads with the answer model instead,
+  for rescuing a bad transcription
 - answer_events(prompt, system, resume_session_id, images) -> iterator of events:
     ("text", str)     incremental answer text
     ("session", str)  the provider session id to store for resuming (session providers)
@@ -22,7 +24,7 @@ class Provider(Protocol):
     name: str
     supports_sessions: bool
 
-    def transcribe(self, ink_png: bytes) -> str: ...
+    def transcribe(self, ink_png: bytes, strong: bool = False) -> str: ...
 
     def answer_events(
         self,

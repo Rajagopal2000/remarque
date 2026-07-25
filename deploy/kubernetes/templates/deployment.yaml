@@ -68,6 +68,8 @@ spec:
               value: {{ .Values.config.rmHost | quote }}
             - name: SESSION_TTL_DAYS
               value: {{ .Values.config.sessionTtlDays | quote }}
+            - name: ANKI_AUTO_HOURS
+              value: {{ .Values.config.ankiAutoHours | quote }}
             {{- if .Values.anki.enabled }}
             - name: ANKI_CONNECT_URL
               value: "http://remarque-anki:8765"

@@ -36,13 +36,14 @@ class GeminiProvider:
     name = "gemini"
     supports_sessions = False
 
-    def transcribe(self, ink_png: bytes) -> str:
+    def transcribe(self, ink_png: bytes, strong: bool = False) -> str:
         _require_cli()
         with tempfile.TemporaryDirectory(prefix="remarque-ink-") as tmpdir:
             image_path = Path(tmpdir) / "ink.png"
             image_path.write_bytes(ink_png)
             prompt = f"{TRANSCRIBE_SYSTEM}\nTranscribe the handwriting in @{image_path.name}"
-            out = _run(prompt, settings.gemini_transcribe_model, tmpdir)
+            model = settings.gemini_model if strong else settings.gemini_transcribe_model
+            out = _run(prompt, model, tmpdir)
             return out or "[illegible]"
 
     def answer_events(
