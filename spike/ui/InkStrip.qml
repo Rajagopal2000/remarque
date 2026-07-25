@@ -1,7 +1,8 @@
 import QtQuick 2.15
-import QtQuick.Shapes 1.15
 
 // One test strip: draws polylines from whatever input its chosen handler receives.
+// Ink is drawn with Canvas: xochitl's e-ink renderer does not rasterize
+// QtQuick.Shapes items, so vector Shape strokes never appear on the display.
 Rectangle {
     id: strip
     property string label: ""
@@ -18,12 +19,14 @@ Rectangle {
 
     function startStroke(x, y, info) {
         current = [{ "x": x, "y": y }];
+        ink.requestPaint();
         event(info);
     }
     function extendStroke(x, y) {
         var c = current.slice();
         c.push({ "x": x, "y": y });
         current = c;
+        ink.requestPaint();
     }
     function endStroke() {
         if (current.length > 0) {
@@ -31,11 +34,13 @@ Rectangle {
             s.push(current);
             strokes = s;
             current = [];
+            ink.requestPaint();
         }
     }
     function clearInk() {
         strokes = [];
         current = [];
+        ink.requestPaint();
     }
 
     Text {
@@ -48,22 +53,30 @@ Rectangle {
         z: 2
     }
 
-    Repeater {
-        model: strip.strokes.length + (strip.current.length > 0 ? 1 : 0)
-        delegate: Shape {
-            anchors.fill: parent
-            property var pts: index < strip.strokes.length ? strip.strokes[index] : strip.current
-            ShapePath {
-                strokeColor: "black"
-                strokeWidth: 3
-                fillColor: "transparent"
-                capStyle: ShapePath.RoundCap
-                joinStyle: ShapePath.RoundJoin
-                startX: pts.length > 0 ? pts[0].x : 0
-                startY: pts.length > 0 ? pts[0].y : 0
-                PathPolyline {
-                    path: pts.map(function(p) { return Qt.point(p.x, p.y); })
-                }
+    Canvas {
+        id: ink
+        anchors.fill: parent
+        renderStrategy: Canvas.Immediate
+        renderTarget: Canvas.Image
+        onPaint: {
+            var ctx = getContext("2d");
+            ctx.clearRect(0, 0, width, height);
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 3;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            var all = strip.strokes.slice();
+            if (strip.current.length > 0)
+                all.push(strip.current);
+            for (var i = 0; i < all.length; i++) {
+                var pts = all[i];
+                if (pts.length < 2)
+                    continue;
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (var j = 1; j < pts.length; j++)
+                    ctx.lineTo(pts[j].x, pts[j].y);
+                ctx.stroke();
             }
         }
     }

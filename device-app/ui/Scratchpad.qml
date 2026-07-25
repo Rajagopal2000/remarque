@@ -1,5 +1,4 @@
 import QtQuick 2.15
-import QtQuick.Shapes 1.15
 import net.asivery.ApploadUtils
 
 // Handwriting capture area. Strokes are kept as point lists and sent to the
@@ -20,6 +19,7 @@ Rectangle {
     function clearInk() {
         strokes = [];
         current = [];
+        ink.repaintAll();
     }
 
     function undoStroke() {
@@ -28,6 +28,7 @@ Rectangle {
         } else if (strokes.length > 0) {
             strokes = strokes.slice(0, strokes.length - 1);
         }
+        ink.repaintAll();
     }
 
     // Strokes as [[x, y], ...] lists for the /api/ask payload.
@@ -48,22 +49,60 @@ Rectangle {
         color: "#999999"
     }
 
-    Repeater {
-        model: pad.strokes.length + (pad.current.length > 0 ? 1 : 0)
-        delegate: Shape {
-            anchors.fill: parent
-            property var pts: index < pad.strokes.length ? pad.strokes[index] : pad.current
-            ShapePath {
-                strokeColor: "black"
-                strokeWidth: 3
-                fillColor: "transparent"
-                capStyle: ShapePath.RoundCap
-                joinStyle: ShapePath.RoundJoin
-                startX: pts.length > 0 ? pts[0].x : 0
-                startY: pts.length > 0 ? pts[0].y : 0
-                PathPolyline {
-                    path: pts.map(function(p) { return Qt.point(p.x, p.y); })
+    // Ink is drawn with Canvas: xochitl's e-ink renderer does not rasterize
+    // QtQuick.Shapes items, so vector Shape strokes never appear on the display.
+    // While writing, only the new pen segment is painted and only its small
+    // dirty rect is flushed to the e-ink; full repaints happen on undo/clear.
+    Canvas {
+        id: ink
+        anchors.fill: parent
+        renderStrategy: Canvas.Immediate
+        renderTarget: Canvas.Image
+        property bool fullRepaint: true
+        property var pending: []   // line segments [x1, y1, x2, y2] not yet drawn
+
+        function drawSegment(x1, y1, x2, y2) {
+            pending.push([x1, y1, x2, y2]);
+            var m = 4;
+            markDirty(Qt.rect(Math.min(x1, x2) - m, Math.min(y1, y2) - m,
+                              Math.abs(x2 - x1) + 2 * m, Math.abs(y2 - y1) + 2 * m));
+        }
+        function repaintAll() {
+            fullRepaint = true;
+            requestPaint();
+        }
+        onPaint: {
+            var ctx = getContext("2d");
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 3;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            if (fullRepaint) {
+                fullRepaint = false;
+                pending = [];
+                ctx.clearRect(0, 0, width, height);
+                var all = pad.strokes.slice();
+                if (pad.current.length > 0)
+                    all.push(pad.current);
+                for (var i = 0; i < all.length; i++) {
+                    var pts = all[i];
+                    if (pts.length < 2)
+                        continue;
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0].x, pts[0].y);
+                    for (var j = 1; j < pts.length; j++)
+                        ctx.lineTo(pts[j].x, pts[j].y);
+                    ctx.stroke();
                 }
+            } else {
+                for (var k = 0; k < pending.length; k++) {
+                    var seg = pending[k];
+                    ctx.beginPath();
+                    ctx.moveTo(seg[0], seg[1]);
+                    ctx.lineTo(seg[2], seg[3]);
+                    ctx.stroke();
+                }
+                pending = [];
             }
         }
     }
@@ -72,9 +111,13 @@ Rectangle {
         anchors.fill: parent
         onPressed: (mouse) => { pad.current = [{ "x": mouse.x, "y": mouse.y }]; }
         onPositionChanged: (mouse) => {
-            var c = pad.current.slice();
+            // Append in place: reassigning the property here would cost an
+            // O(n) array copy plus change notifications at pen input rate.
+            var c = pad.current;
+            var prev = c.length > 0 ? c[c.length - 1] : null;
             c.push({ "x": mouse.x, "y": mouse.y });
-            pad.current = c;
+            if (prev !== null)
+                ink.drawSegment(prev.x, prev.y, mouse.x, mouse.y);
         }
         onReleased: {
             if (pad.current.length > 1) {
@@ -86,9 +129,10 @@ Rectangle {
         }
     }
 
-    // Low-latency e-ink refresh while writing.
+    // Lowest-latency e-ink waveform while writing (UFast trades ink quality
+    // for the response time native inking gets).
     DisplayMethodArea {
         anchors.fill: parent
-        displayMethod: DisplayMethodArea.Fast
+        displayMethod: DisplayMethodArea.UFast
     }
 }

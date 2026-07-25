@@ -52,9 +52,12 @@ def run_sync(force: bool = False, timeout: int = 120) -> float:
     if not force and age is not None and age < settings.sync_max_age:
         return 0.0
     start = time.monotonic()
+    # No -z: compression is CPU-bound on the tablet and far slower than the
+    # LAN/USB link it would save bandwidth on (observed: 413 MB in ~20s without
+    # -z vs a 90s+ stall with it).
     cmd = [
         "rsync",
-        "-az",
+        "-a",
         "--delete",
         "--exclude=*.thumbnails",
         "--exclude=*.cache",
