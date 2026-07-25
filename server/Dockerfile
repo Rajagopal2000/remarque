@@ -17,9 +17,11 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 COPY app ./app
 
-# Non-root; HOME lives on the data PVC at runtime so Claude Code sessions,
+# Non-root; HOME lives on the data volume at runtime so Claude Code sessions,
 # ssh known_hosts, and our sqlite state all persist across restarts.
-RUN useradd --uid 1000 --create-home app
+# /data is created app-owned in the image so Docker named volumes inherit the
+# ownership (Kubernetes gets the same effect from fsGroup).
+RUN useradd --uid 1000 --create-home app && mkdir -p /data && chown app:app /data
 USER 1000
 ENV PATH="/app/.venv/bin:$PATH" \
     HOME=/data/home \

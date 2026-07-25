@@ -22,7 +22,8 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - server/.env
+      - path: server/.env
+        required: false
     volumes:
       - remarque-data:/data
       # To let the server sync documents from the tablet, provide the SSH key:
@@ -30,13 +31,16 @@ services:
       # - ~/.ssh/id_remarkable:/ssh-key/id_remarkable:ro
     # Copies the mounted SSH key with the 0600 permissions ssh insists on,
     # then starts the API. Works unchanged when no key is mounted.
-    command: >
-      sh -c "mkdir -p /data/home/.ssh
-      && if [ -f /ssh-key/id_remarkable ]; then
-           cp /ssh-key/id_remarkable /data/home/.ssh/id_remarkable
-           && chmod 600 /data/home/.ssh/id_remarkable;
-         fi
-      && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data/home/.ssh
+        if [ -f /ssh-key/id_remarkable ]; then
+          cp /ssh-key/id_remarkable /data/home/.ssh/id_remarkable
+          chmod 600 /data/home/.ssh/id_remarkable
+        fi
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
       interval: 30s
