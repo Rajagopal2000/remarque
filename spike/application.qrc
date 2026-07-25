@@ -1,0 +1,7 @@
+<RCC>
+    <qresource>
+        <file>ui/main.qml</file>
+        <file>ui/Config.qml</file>
+        <file>ui/InkStrip.qml</file>
+    </qresource>
+</RCC>

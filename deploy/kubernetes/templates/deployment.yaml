@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remarque
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # single PVC + on-disk agent sessions: never two writers
+  selector:
+    matchLabels:
+      app: remarque
+  template:
+    metadata:
+      labels:
+        app: remarque
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      {{- if .Values.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # ssh refuses group-readable private keys, and secret mounts cannot be
+        # chowned to the pod user, so copy the key onto the PVC with 0600.
+        - name: install-ssh-key
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              mkdir -p /data/home/.ssh
+              cp /ssh-secret/id_remarkable /data/home/.ssh/id_remarkable
+              chmod 600 /data/home/.ssh/id_remarkable
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: ssh-key
+              mountPath: /ssh-secret
+              readOnly: true
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PROVIDER
+              value: {{ .Values.config.provider | quote }}
+            - name: CLAUDE_CODE_MODEL
+              value: {{ .Values.config.claudeCodeModel | quote }}
+            - name: CLAUDE_CODE_TRANSCRIBE_MODEL
+              value: {{ .Values.config.claudeCodeTranscribeModel | quote }}
+            - name: RM_HOST
+              value: {{ .Values.config.rmHost | quote }}
+            - name: SESSION_TTL_DAYS
+              value: {{ .Values.config.sessionTtlDays | quote }}
+            {{- if .Values.anki.enabled }}
+            - name: ANKI_CONNECT_URL
+              value: "http://remarque-anki:8765"
+            {{- end }}
+            - name: SSH_KEY_PATH
+              value: /data/home/.ssh/id_remarkable
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: remarque-auth
+                  key: CLAUDE_CODE_OAUTH_TOKEN
+            - name: API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: remarque-auth
+                  key: API_TOKEN
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: remarque-data
+        - name: ssh-key
+          secret:
+            secretName: remarque-ssh

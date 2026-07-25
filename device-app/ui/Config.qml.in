@@ -1,0 +1,6 @@
+import QtQuick 2.15
+
+QtObject {
+    property string serverUrl: "@SERVER_URL@"
+    property string apiToken: "@API_TOKEN@"
+}

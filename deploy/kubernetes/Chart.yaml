@@ -1,0 +1,6 @@
+apiVersion: v2
+name: remarque
+description: reMarkable AI reading assistant companion service
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

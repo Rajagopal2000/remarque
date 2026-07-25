@@ -1,0 +1,10 @@
+<RCC>
+    <qresource>
+        <file>ui/main.qml</file>
+        <file>ui/Config.qml</file>
+        <file>ui/Api.qml</file>
+        <file>ui/Scratchpad.qml</file>
+        <file>ui/AnswerView.qml</file>
+        <file>ui/HistoryView.qml</file>
+    </qresource>
+</RCC>

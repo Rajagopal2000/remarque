@@ -1,0 +1,8 @@
+{
+    "name": "AI Pen Spike",
+    "loadsBackend": false,
+    "entry": "/ui/main.qml",
+    "id": "ai-pen-spike",
+    "supportsScaling": true,
+    "canHaveMultipleFrontends": false
+}

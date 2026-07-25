@@ -1,0 +1,8 @@
+{
+    "name": "AI Assistant",
+    "loadsBackend": false,
+    "entry": "/ui/main.qml",
+    "id": "ai-reading-assistant",
+    "supportsScaling": true,
+    "canHaveMultipleFrontends": false
+}

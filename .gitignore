@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+server/.venv/
+device-app/output/
+spike/output/
+device-app/ui/Config.qml
+spike/ui/Config.qml
+.DS_Store

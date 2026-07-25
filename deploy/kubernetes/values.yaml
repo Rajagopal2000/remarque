@@ -1,0 +1,38 @@
+image:
+  repository: ghcr.io/rajagopal2000/remarque-server
+  tag: latest
+
+# Name of a docker-registry secret for pulling from GHCR; empty for public images.
+imagePullSecret: ""
+
+# Pinned MetalLB LAN IP the tablet talks to; pick a free one from the pool
+# (192.168.4.200-192.168.4.210) and bake http://<ip>:8000 into the device app.
+serviceIP: 192.168.4.206
+
+config:
+  provider: claude-code
+  claudeCodeModel: sonnet
+  claudeCodeTranscribeModel: sonnet
+  # Tablet's LAN IP (WiFi). Give the tablet a DHCP reservation.
+  rmHost: 192.168.4.50
+  sessionTtlDays: "730"
+
+storage:
+  size: 5Gi
+  # Empty string = cluster default StorageClass (Longhorn).
+  className: ""
+
+# In-cluster Anki desktop (KasmVNC + AnkiConnect) that the server pushes decks
+# into; it holds the AnkiWeb login and syncs decks to your account.
+anki:
+  enabled: true
+  image: chrislongros/anki-desktop
+  tag: latest
+  storage: 1Gi
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 1536Mi
