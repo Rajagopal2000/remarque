@@ -86,6 +86,9 @@ def main() -> int:
     ask_area = root.findChild(object, "askButton")
     answer_view = root.findChild(object, "answerView")
     assert scratchpad and ask_area and answer_view, "objectNames not found"
+    api_obj = next(
+        c for c in root.findChildren(object) if "Api_QMLTYPE" in c.metaObject().className()
+    )
 
     strokes = make_hi_strokes(scratchpad.width(), scratchpad.height())
     scratchpad.setProperty("strokes", strokes)
@@ -104,7 +107,10 @@ def main() -> int:
         app.processEvents()
         status = root.property("status")
         answer = answer_view.property("fullText")
-        if status and (status.startswith("Q:") or status.startswith("Error")) and answer:
+        # Wait for the job to finish, not just for streamed text: history is
+        # recorded on completion, and the History check below reads it.
+        done = not api_obj.property("busy")
+        if status and (status.startswith("Q:") or status.startswith("Error")) and answer and done:
             break
         if status and status.startswith("Error"):
             break
