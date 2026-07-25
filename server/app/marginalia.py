@@ -98,6 +98,52 @@ class MarginNoteStore:
         return [{"doc_id": d, "text": t} for d, t in rows]
 
 
+def page_ink(sync_dir: Path, doc_id: str, page_id: str) -> list[list[list[float]]]:
+    """Pen strokes on one page, or [] when the page has no parsable ink."""
+    rm_path = sync_dir / doc_id / f"{page_id}.rm"
+    if not rm_path.exists():
+        return []
+    try:
+        return _page_strokes(rm_path)
+    except Exception as exc:
+        log.warning("failed to parse %s: %s", rm_path.name, exc)
+        return []
+
+
+class AskedInkStore:
+    """Strokes already consumed as page-ask questions, per page.
+
+    Lets a second question written on the same page be asked alone instead of
+    re-reading every older stroke on the page."""
+
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+        with self._connect() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS asked_page_ink ("
+                "doc_id TEXT NOT NULL, page_id TEXT NOT NULL, stroke_hash TEXT NOT NULL,"
+                "PRIMARY KEY (doc_id, page_id, stroke_hash))"
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path)
+
+    def seen(self, doc_id: str, page_id: str) -> set[str]:
+        with _lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT stroke_hash FROM asked_page_ink WHERE doc_id = ? AND page_id = ?",
+                (doc_id, page_id),
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def add(self, doc_id: str, page_id: str, stroke_hashes: list[str]) -> None:
+        with _lock, self._connect() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO asked_page_ink VALUES (?, ?, ?)",
+                [(doc_id, page_id, h) for h in stroke_hashes],
+            )
+
+
 def page_note(
     store: MarginNoteStore,
     transcriber,

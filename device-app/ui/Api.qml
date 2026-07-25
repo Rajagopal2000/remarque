@@ -26,6 +26,18 @@ Item {
     signal finished()
     signal failed(string message)
 
+    // Prefer the API's human-readable detail over raw JSON in error messages.
+    function _errorText(xhr) {
+        if (xhr.status === 0)
+            return "server unreachable";
+        try {
+            var detail = JSON.parse(xhr.responseText).detail;
+            if (detail)
+                return "" + detail;
+        } catch (e) {}
+        return "" + xhr.status + " " + xhr.responseText;
+    }
+
     function _get(path, onOk, onErr) {
         var xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function() {
@@ -34,7 +46,7 @@ Item {
             if (xhr.status === 200)
                 onOk(JSON.parse(xhr.responseText));
             else
-                onErr(xhr.status === 0 ? "server unreachable" : "" + xhr.status + " " + xhr.responseText);
+                onErr(_errorText(xhr));
         };
         xhr.open("GET", serverUrl + path);
         if (apiToken !== "")
@@ -51,7 +63,7 @@ Item {
             if (xhr.status === 200)
                 onOk(JSON.parse(xhr.responseText));
             else
-                onErr(xhr.status === 0 ? "server unreachable" : "" + xhr.status + " " + xhr.responseText);
+                onErr(_errorText(xhr));
         };
         xhr.open("POST", serverUrl + path);
         xhr.setRequestHeader("Content-Type", "application/json");
@@ -93,6 +105,25 @@ Item {
             "include_doc_text": includeDocText,
             "brief": brief === true,
             "strong_transcribe": strongTranscribe === true
+        }, function(resp) {
+            api.jobId = resp.job_id;
+            api.syncAge(resp.sync_age_seconds);
+            pollTimer.start();
+        }, function(msg) {
+            api.busy = false;
+            api.failed(msg);
+        });
+    }
+
+    function pageAsk(includeHighlights, brief) {
+        if (busy)
+            return;
+        busy = true;
+        jobId = "";
+        cursor = 0;
+        _post("/api/ask/page", {
+            "include_highlights": includeHighlights,
+            "brief": brief === true
         }, function(resp) {
             api.jobId = resp.job_id;
             api.syncAge(resp.sync_age_seconds);

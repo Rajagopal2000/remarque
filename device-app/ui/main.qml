@@ -94,6 +94,9 @@ Rectangle {
         } else if (a.kind === "quizanswer") {
             root.startAction("Reading handwriting...");
             api.quizAnswer(a.strokes, a.w, a.h, root.docId);
+        } else if (a.kind === "pageask") {
+            root.startAction("Reading page ink...");
+            api.pageAsk(root.includeHighlights, root.brief);
         } else if (a.kind === "anki") {
             root.startAction("Creating Anki deck...");
             api.anki(root.docId !== "" ? root.docId : "__no_document__");
@@ -323,7 +326,7 @@ Rectangle {
         component QuickButton: Rectangle {
             property string label: ""
             property string action: ""
-            width: (parent.width - 60) / 7
+            width: (parent.width - 70) / 8
             height: 40
             border.width: 2; radius: 6
             opacity: api.busy ? 0.4 : 1
@@ -343,12 +346,31 @@ Rectangle {
             width: parent.width
             height: 44
             spacing: 10
+            // Native-ink ask: the question is handwritten on the PDF page
+            // itself (no scratchpad latency); the server reads the fresh ink.
+            Rectangle {
+                width: (parent.width - 70) / 8
+                height: 40
+                border.width: 2; radius: 6
+                opacity: api.busy ? 0.4 : 1
+                Text { anchors.centerIn: parent; text: "Page ask"; font.pixelSize: 18; font.bold: true }
+                MouseArea {
+                    objectName: "pageAskButton"
+                    anchors.fill: parent
+                    enabled: !api.busy
+                    onClicked: {
+                        root.lastAction = { "kind": "pageask" };
+                        root.startAction("Reading page ink...");
+                        api.pageAsk(root.includeHighlights, root.brief);
+                    }
+                }
+            }
             QuickButton { label: "Sum page"; action: "summarize_page" }
             QuickButton { label: "Sum doc"; action: "summarize_doc" }
             QuickButton { label: "Explain HL"; action: "explain_highlights" }
             QuickButton { label: "Define HL"; action: "define_highlight" }
             Rectangle {
-                width: (parent.width - 60) / 7
+                width: (parent.width - 70) / 8
                 height: 40
                 border.width: 2; radius: 6
                 color: root.quizPending ? "#e8e8e8" : "white"
@@ -366,7 +388,7 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: (parent.width - 60) / 7
+                width: (parent.width - 70) / 8
                 height: 40
                 border.width: 2; radius: 6
                 opacity: api.busy ? 0.4 : 1
@@ -383,7 +405,7 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: (parent.width - 60) / 7
+                width: (parent.width - 70) / 8
                 height: 40
                 border.width: 2; radius: 6
                 opacity: api.busy ? 0.4 : 1

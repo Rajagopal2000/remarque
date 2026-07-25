@@ -19,6 +19,7 @@ from . import (
     digest,
     documents,
     export,
+    inkselect,
     marginalia,
     metrics,
     pdftext,
@@ -61,6 +62,7 @@ history = History(settings.history_db)
 sessions = SessionStore(settings.history_db, settings.session_ttl_days)
 anki_state = anki.AnkiStateStore(settings.history_db)
 margin_notes = marginalia.MarginNoteStore(settings.history_db)
+asked_ink = marginalia.AskedInkStore(settings.history_db)
 search_index = search.SearchIndex(settings.history_db)
 quiz_results = quizbank.QuizResultStore(settings.history_db)
 
@@ -393,6 +395,109 @@ def ask(req: AskRequest) -> dict:
         "doc": _doc_info(doc) if doc else None,
         "session": _session_info(doc_id),
         "sync_age_seconds": sync.last_success_age(),
+    }
+
+
+class PageAskRequest(BaseModel):
+    doc_id: str | None = None
+    include_highlights: bool = True
+    brief: bool = False
+
+
+@api.post("/ask/page")
+def ask_page(req: PageAskRequest) -> dict:
+    """Ask with a question handwritten directly on the current PDF page.
+
+    Native inking has none of the panel scratchpad's e-ink latency; the fresh
+    pen strokes on the page (anything not consumed by a previous page ask)
+    are transcribed as the question.
+    """
+    # xochitl saves page ink lazily (on page turn, document close, suspend),
+    # so the just-written question may not be on disk yet. Retry the sync a
+    # few times before giving up to cover the save landing a moment late.
+    doc = None
+    fresh: list = []
+    page_id = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(1.5)
+        try:
+            run_sync(force=True)
+        except Exception as exc:
+            metrics.SYNC_FAILURES.inc()
+            log.warning("page ask sync failed, using cached ink: %s", exc)
+        doc = (
+            documents.get_document(settings.sync_dir, req.doc_id)
+            if req.doc_id
+            else documents.current_document(settings.sync_dir)
+        )
+        if doc is None:
+            raise HTTPException(status_code=404, detail="no document found")
+        page_id = _current_page_id(doc)
+        if page_id is None:
+            raise HTTPException(status_code=400, detail="current page is unknown")
+        strokes = marginalia.page_ink(settings.sync_dir, doc.doc_id, page_id)
+        seen = asked_ink.seen(doc.doc_id, page_id)
+        fresh = [s for s in strokes if marginalia.ink_hash([s]) not in seen]
+        if fresh:
+            break
+    doc_id = doc.doc_id
+    if not fresh:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "no new ink found on this page. The tablet saves ink when the "
+                "page turns: flip the page and back, then tap Page ask again."
+            ),
+        )
+
+    # A pen-drawn circle selects its contents as the question; each ask
+    # consumes one circle (oldest first), so the circle just drawn is the one
+    # read. With no circle, all fresh ink is the question.
+    groups = inkselect.circled_groups(fresh)
+    if groups:
+        group = groups[0]
+        question_strokes = [fresh[j] for j in group["inside"]]
+        consumed = question_strokes + [fresh[group["loop"]]]
+    else:
+        question_strokes = fresh
+        consumed = fresh
+    consumed_hashes = [marginalia.ink_hash([s]) for s in consumed]
+
+    pdf_page = documents.pdf_page_index(doc.content, doc.page_index)
+    page_number = pdf_page + 1 if pdf_page >= 0 else None
+    highlights = (
+        extract_highlights(settings.sync_dir, doc_id, doc.content)
+        if req.include_highlights
+        else None
+    )
+    xs = [p[0] for stroke in question_strokes for p in stroke]
+    ys = [p[1] for stroke in question_strokes for p in stroke]
+    ink_png = render_strokes(
+        question_strokes, max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+    )
+
+    def mark_asked(job: Job) -> None:
+        asked_ink.add(doc_id, page_id, consumed_hashes)
+
+    # No margin_page_id: the page's own ink is the question, not extra context.
+    job_id = _start_answer_job(
+        doc,
+        doc_id,
+        kind="page_ask",
+        ink_png=ink_png,
+        page_number=page_number,
+        highlights=highlights,
+        extra_text=None,
+        brief=req.brief,
+        on_success=mark_asked,
+    )
+    return {
+        "job_id": job_id,
+        "doc": _doc_info(doc),
+        "session": _session_info(doc_id),
+        "sync_age_seconds": sync.last_success_age(),
+        "circled_remaining": max(0, len(groups) - 1),
     }
 
 

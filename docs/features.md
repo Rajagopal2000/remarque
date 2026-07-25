@@ -16,6 +16,13 @@ Answers stream back to the panel as paginated text.
 - "Attach" cycles extra per-ask context: none, current page text, full document text, or a rendered image of the current page ("image" sends the page to the vision model, for questions about figures and equations).
 - The status line shows elapsed seconds while thinking, per-ask token usage, and a warning when the answer used stale synced data.
 
+## Page ask (native ink)
+
+Write the question directly on the PDF page with the pen, circle it, flip the page and back (the tablet only saves ink on page events), then tap Page ask.
+The server reads the fresh page ink and transcribes the newest un-asked circle as the question; each ask consumes its circle, so several circled questions are answered one tap each, in drawing order.
+A circle that encloses nothing is ignored, and with no circle at all, every stroke written since the last page ask becomes the question.
+This exists because the panel scratchpad cannot match native inking latency, and the selection tool's state never reaches disk.
+
 ## Quick actions
 
 One tap, no handwriting, no transcription call: summarize page, summarize document, explain highlights, define the latest highlight.
