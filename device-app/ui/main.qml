@@ -1,4 +1,5 @@
 import QtQuick 2.15
+import QtQuick.Window 2.15
 
 // AI reading assistant panel: handwrite a question, get a typeset answer.
 Rectangle {
@@ -13,6 +14,7 @@ Rectangle {
 
     property string docTitle: ""
     property string docId: ""
+    property int currentPageNumber: 0
     property string status: "Ready"
     property string questionRead: ""
     property string sessionLabel: ""
@@ -25,6 +27,7 @@ Rectangle {
     property bool canRetry: false
     property bool canReread: false
     property bool quizPending: false
+    property bool moreOpen: false
     property int elapsedS: 0
 
     Timer {
@@ -106,6 +109,47 @@ Rectangle {
         }
     }
 
+    // xochitl's main window exposes saveMyNeck(), which persists the open
+    // document's pending ink. The panel runs inside the same QML scene, so
+    // it can reach the hook - sparing the user the flip-the-page-to-save
+    // dance before a Page ask. The method lives on the Window object itself
+    // (an Item's parent chain stops at contentItem, one step below it), so
+    // check the window first, then ancestors, then sweep the scene.
+    function forceDocumentSave() {
+        var w = root.Window.window;
+        if (w && typeof w.saveMyNeck === "function") {
+            console.log("remarque: saveMyNeck found on window");
+            w.saveMyNeck();
+            return true;
+        }
+        var p = root.parent;
+        while (p) {
+            if (typeof p.saveMyNeck === "function") {
+                console.log("remarque: saveMyNeck found on ancestor " + p);
+                p.saveMyNeck();
+                return true;
+            }
+            p = p.parent;
+        }
+        if (w && w.contentItem) {
+            var queue = [w.contentItem];
+            var steps = 0;
+            while (queue.length > 0 && steps < 5000) {
+                var it = queue.shift();
+                steps++;
+                if (typeof it.saveMyNeck === "function") {
+                    console.log("remarque: saveMyNeck found in scene at " + it);
+                    it.saveMyNeck();
+                    return true;
+                }
+                for (var i = 0; i < it.children.length; i++)
+                    queue.push(it.children[i]);
+            }
+            console.log("remarque: saveMyNeck not found (scanned " + steps + " items)");
+        }
+        return false;
+    }
+
     function formatAge(seconds) {
         if (seconds < 3600)
             return Math.round(seconds / 60) + "m";
@@ -125,6 +169,7 @@ Rectangle {
         onRefreshed: (data) => {
             root.docTitle = data.title || "";
             root.docId = data.doc_id || "";
+            root.currentPageNumber = data.page_number || 0;
             root.sessionLabel = root.describeSession(data.session);
             root.status = data.sync_error
                 ? "Sync failed, showing last-synced data"
@@ -187,6 +232,7 @@ Rectangle {
 
         // Header
         Row {
+            id: header
             width: parent.width
             height: 44
             spacing: 10
@@ -212,14 +258,39 @@ Rectangle {
             height: parent.height * 0.28
         }
 
-        // Controls
-        Row {
+        // Controls: the daily actions; everything else lives behind More.
+        // A Flow, not a Row: in a narrow floating window the buttons wrap
+        // instead of running off the right edge.
+        Flow {
+            id: controls
             width: parent.width
-            height: 48
             spacing: 10
 
             Rectangle {
-                width: 120; height: 44
+                width: 130; height: 44
+                color: api.busy ? "#dddddd" : "black"
+                radius: 6
+                Text {
+                    anchors.centerIn: parent
+                    text: "Page ask"
+                    color: api.busy ? "#888888" : "white"
+                    font.pixelSize: 22
+                    font.bold: true
+                }
+                MouseArea {
+                    objectName: "pageAskButton"
+                    anchors.fill: parent
+                    enabled: !api.busy
+                    onClicked: {
+                        root.lastAction = { "kind": "pageask" };
+                        var saved = root.forceDocumentSave();
+                        root.startAction(saved ? "Saving page ink..." : "Reading page ink...");
+                        api.pageAsk(root.includeHighlights, root.brief);
+                    }
+                }
+            }
+            Rectangle {
+                width: 105; height: 44
                 color: api.busy ? "white" : (!scratchpad.hasInk ? "#dddddd" : "black")
                 border.width: api.busy ? 2 : 0
                 radius: 6
@@ -227,7 +298,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: api.busy ? "Stop" : (root.quizPending ? "Answer" : "Ask")
                     color: api.busy ? "black" : (!scratchpad.hasInk ? "#888888" : "white")
-                    font.pixelSize: 24
+                    font.pixelSize: 22
                     font.bold: true
                 }
                 MouseArea {
@@ -256,9 +327,10 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: 90; height: 44
+                width: 75; height: 44
+                visible: scratchpad.hasInk
                 border.width: 2; radius: 6
-                Text { anchors.centerIn: parent; text: "Undo"; font.pixelSize: 20 }
+                Text { anchors.centerIn: parent; text: "Undo"; font.pixelSize: 19 }
                 MouseArea {
                     objectName: "undoButton"
                     anchors.fill: parent
@@ -266,20 +338,38 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: 90; height: 44
+                width: 75; height: 44
+                visible: scratchpad.hasInk
                 border.width: 2; radius: 6
-                Text { anchors.centerIn: parent; text: "Clear"; font.pixelSize: 20 }
+                Text { anchors.centerIn: parent; text: "Clear"; font.pixelSize: 19 }
                 MouseArea { anchors.fill: parent; onClicked: scratchpad.clearInk() }
             }
             Rectangle {
-                width: 110; height: 44
+                width: 80; height: 44
+                visible: scratchpad.hasInk
+                border.width: 2; radius: 6
+                color: scratchpad.eraseMode ? "black" : "white"
+                Text {
+                    anchors.centerIn: parent
+                    text: "Erase"
+                    font.pixelSize: 19
+                    color: scratchpad.eraseMode ? "white" : "black"
+                }
+                MouseArea {
+                    objectName: "eraseButton"
+                    anchors.fill: parent
+                    onClicked: scratchpad.eraseMode = !scratchpad.eraseMode
+                }
+            }
+            Rectangle {
+                width: 95; height: 44
                 border.width: 2; radius: 6
                 color: (!scratchpad.hasInk || api.searching) ? "#dddddd" : "white"
                 Text {
                     anchors.centerIn: parent
                     text: "Search"
                     color: (!scratchpad.hasInk || api.searching) ? "#888888" : "black"
-                    font.pixelSize: 20
+                    font.pixelSize: 19
                 }
                 MouseArea {
                     objectName: "searchButton"
@@ -295,87 +385,11 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: 100; height: 44
-                border.width: 2; radius: 6
-                color: root.includeHighlights ? "#e8e8e8" : "white"
-                Text {
-                    anchors.centerIn: parent
-                    text: root.includeHighlights ? "HL: on" : "HL: off"
-                    font.pixelSize: 20
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.includeHighlights = !root.includeHighlights
-                }
-            }
-            Rectangle {
-                width: 140; height: 44
-                border.width: 2; radius: 6
-                Text { anchors.centerIn: parent; text: "Attach: " + root.docTextMode; font.pixelSize: 18 }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: {
-                        var modes = ["none", "page", "full", "image"];
-                        root.docTextMode = modes[(modes.indexOf(root.docTextMode) + 1) % modes.length];
-                    }
-                }
-            }
-        }
-
-        // Quick actions: one tap, no handwriting, no transcription call.
-        component QuickButton: Rectangle {
-            property string label: ""
-            property string action: ""
-            width: (parent.width - 70) / 8
-            height: 40
-            border.width: 2; radius: 6
-            opacity: api.busy ? 0.4 : 1
-            Text { anchors.centerIn: parent; text: parent.label; font.pixelSize: 18 }
-            MouseArea {
-                anchors.fill: parent
-                enabled: !api.busy
-                onClicked: {
-                    root.lastAction = { "kind": "quick", "action": parent.action };
-                    root.startAction("Thinking...");
-                    api.quick(parent.action, root.docId, root.brief);
-                }
-            }
-        }
-
-        Row {
-            width: parent.width
-            height: 44
-            spacing: 10
-            // Native-ink ask: the question is handwritten on the PDF page
-            // itself (no scratchpad latency); the server reads the fresh ink.
-            Rectangle {
-                width: (parent.width - 70) / 8
-                height: 40
-                border.width: 2; radius: 6
-                opacity: api.busy ? 0.4 : 1
-                Text { anchors.centerIn: parent; text: "Page ask"; font.pixelSize: 18; font.bold: true }
-                MouseArea {
-                    objectName: "pageAskButton"
-                    anchors.fill: parent
-                    enabled: !api.busy
-                    onClicked: {
-                        root.lastAction = { "kind": "pageask" };
-                        root.startAction("Reading page ink...");
-                        api.pageAsk(root.includeHighlights, root.brief);
-                    }
-                }
-            }
-            QuickButton { label: "Sum page"; action: "summarize_page" }
-            QuickButton { label: "Sum doc"; action: "summarize_doc" }
-            QuickButton { label: "Explain HL"; action: "explain_highlights" }
-            QuickButton { label: "Define HL"; action: "define_highlight" }
-            Rectangle {
-                width: (parent.width - 70) / 8
-                height: 40
+                width: 85; height: 44
                 border.width: 2; radius: 6
                 color: root.quizPending ? "#e8e8e8" : "white"
                 opacity: api.busy ? 0.4 : 1
-                Text { anchors.centerIn: parent; text: "Quiz"; font.pixelSize: 18 }
+                Text { anchors.centerIn: parent; text: "Quiz"; font.pixelSize: 19 }
                 MouseArea {
                     objectName: "quizButton"
                     anchors.fill: parent
@@ -388,11 +402,54 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: (parent.width - 70) / 8
+                width: 75; height: 44
+                border.width: 2; radius: 6
+                color: root.moreOpen ? "#e8e8e8" : "white"
+                Text { anchors.centerIn: parent; text: root.moreOpen ? "Less" : "More"; font.pixelSize: 19 }
+                MouseArea {
+                    objectName: "moreButton"
+                    anchors.fill: parent
+                    onClicked: root.moreOpen = !root.moreOpen
+                }
+            }
+        }
+
+        // More, row 1 - quick actions: one tap, no handwriting, no
+        // transcription call. Buttons size to their labels and wrap.
+        component QuickButton: Rectangle {
+            property string label: ""
+            property string action: ""
+            width: qbText.implicitWidth + 26
+            height: 40
+            border.width: 2; radius: 6
+            opacity: api.busy ? 0.4 : 1
+            Text { id: qbText; anchors.centerIn: parent; text: parent.label; font.pixelSize: 18 }
+            MouseArea {
+                anchors.fill: parent
+                enabled: !api.busy
+                onClicked: {
+                    root.lastAction = { "kind": "quick", "action": parent.action };
+                    root.startAction("Thinking...");
+                    api.quick(parent.action, root.docId, root.brief);
+                }
+            }
+        }
+
+        Flow {
+            id: moreRow1
+            width: parent.width
+            spacing: 10
+            visible: root.moreOpen
+            QuickButton { label: "Sum page"; action: "summarize_page" }
+            QuickButton { label: "Sum doc"; action: "summarize_doc" }
+            QuickButton { label: "Explain HL"; action: "explain_highlights" }
+            QuickButton { label: "Define HL"; action: "define_highlight" }
+            Rectangle {
+                width: ankiText.implicitWidth + 26
                 height: 40
                 border.width: 2; radius: 6
                 opacity: api.busy ? 0.4 : 1
-                Text { anchors.centerIn: parent; text: "Anki"; font.pixelSize: 18 }
+                Text { id: ankiText; anchors.centerIn: parent; text: "Anki"; font.pixelSize: 18 }
                 MouseArea {
                     objectName: "ankiButton"
                     anchors.fill: parent
@@ -405,11 +462,11 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: (parent.width - 70) / 8
+                width: exportText.implicitWidth + 26
                 height: 40
                 border.width: 2; radius: 6
                 opacity: api.busy ? 0.4 : 1
-                Text { anchors.centerIn: parent; text: "Export"; font.pixelSize: 18 }
+                Text { id: exportText; anchors.centerIn: parent; text: "Export"; font.pixelSize: 18 }
                 MouseArea {
                     objectName: "exportButton"
                     anchors.fill: parent
@@ -426,39 +483,66 @@ Rectangle {
             id: answerView
             objectName: "answerView"
             width: parent.width
-            height: parent.height - scratchpad.height - 290
+            // Every other row measures itself (the Flows wrap in narrow
+            // windows), so the answer area takes whatever is left over.
+            height: parent.height - header.height - scratchpad.height
+                    - controls.height - statusRow.height
+                    - (root.moreOpen ? moreRow1.height + moreRow2.height + 2 * parent.spacing : 0)
+                    - 4 * parent.spacing
         }
 
-        // Session row
-        Row {
+        // More, row 2 - toggles and session management.
+        Flow {
+            id: moreRow2
             width: parent.width
-            height: 40
             spacing: 10
+            visible: root.moreOpen
             Text {
                 objectName: "sessionText"
                 text: root.sessionLabel !== "" ? root.sessionLabel : "Session: -"
-                font.pixelSize: 19
+                font.pixelSize: 16
                 color: "#555555"
-                width: parent.width - 580
-                anchors.verticalCenter: parent.verticalCenter
-                elide: Text.ElideRight
+                height: 38
+                verticalAlignment: Text.AlignVCenter
             }
-            Rectangle {
-                width: 120; height: 38
+            component MoreButton: Rectangle {
+                property string label: ""
+                property bool highlighted: false
+                signal tapped()
+                width: mbText.implicitWidth + 22
+                height: 38
                 border.width: 2; radius: 6
-                color: root.brief ? "#e8e8e8" : "white"
-                anchors.verticalCenter: parent.verticalCenter
-                Text { anchors.centerIn: parent; text: root.brief ? "Brief: on" : "Brief: off"; font.pixelSize: 18 }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.brief = !root.brief
+                color: highlighted ? "#e8e8e8" : "white"
+                Text {
+                    id: mbText
+                    anchors.centerIn: parent
+                    text: parent.label
+                    font.pixelSize: 16
+                }
+                MouseArea { anchors.fill: parent; onClicked: parent.tapped() }
+            }
+            MoreButton {
+                label: root.includeHighlights ? "HL: on" : "HL: off"
+                highlighted: root.includeHighlights
+                onTapped: root.includeHighlights = !root.includeHighlights
+            }
+            MoreButton {
+                label: "Att: " + root.docTextMode
+                onTapped: {
+                    var modes = ["none", "page", "full", "image"];
+                    root.docTextMode = modes[(modes.indexOf(root.docTextMode) + 1) % modes.length];
                 }
             }
+            MoreButton {
+                label: root.brief ? "Brief: on" : "Brief: off"
+                highlighted: root.brief
+                onTapped: root.brief = !root.brief
+            }
             Rectangle {
-                width: 120; height: 38
+                width: historyText.implicitWidth + 22
+                height: 38
                 border.width: 2; radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                Text { anchors.centerIn: parent; text: "History"; font.pixelSize: 19 }
+                Text { id: historyText; anchors.centerIn: parent; text: "History"; font.pixelSize: 16 }
                 MouseArea {
                     objectName: "historyButton"
                     anchors.fill: parent
@@ -466,16 +550,15 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: 130; height: 38
+                width: compactText.implicitWidth + 22
+                height: 38
                 border.width: 2; radius: 6
-                visible: root.sessionLabel !== ""
-                opacity: api.busy ? 0.4 : 1
-                anchors.verticalCenter: parent.verticalCenter
-                Text { anchors.centerIn: parent; text: "Compact"; font.pixelSize: 19 }
+                opacity: (api.busy || root.sessionLabel === "") ? 0.4 : 1
+                Text { id: compactText; anchors.centerIn: parent; text: "Compact"; font.pixelSize: 16 }
                 MouseArea {
                     objectName: "compactButton"
                     anchors.fill: parent
-                    enabled: !api.busy
+                    enabled: !api.busy && root.sessionLabel !== ""
                     onClicked: {
                         root.lastAction = { "kind": "compact" };
                         root.startAction("Compacting session...");
@@ -484,10 +567,10 @@ Rectangle {
                 }
             }
             Rectangle {
-                width: 170; height: 38
+                width: newSessText.implicitWidth + 22
+                height: 38
                 border.width: 2; radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                Text { anchors.centerIn: parent; text: "New session"; font.pixelSize: 19 }
+                Text { id: newSessText; anchors.centerIn: parent; text: "New sess."; font.pixelSize: 16 }
                 MouseArea {
                     objectName: "newSessionButton"
                     anchors.fill: parent
@@ -498,6 +581,7 @@ Rectangle {
         }
 
         Row {
+            id: statusRow
             width: parent.width
             height: 40
             spacing: 10
@@ -545,6 +629,7 @@ Rectangle {
         id: historyView
         objectName: "historyView"
         anchors.fill: parent
+        currentPageNumber: root.currentPageNumber
         z: 10
     }
 

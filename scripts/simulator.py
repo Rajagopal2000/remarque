@@ -90,6 +90,19 @@ def main() -> int:
         c for c in root.findChildren(object) if "Api_QMLTYPE" in c.metaObject().className()
     )
 
+    # Pen down + up with no movement (an i-dot, a period) must register as a
+    # single-point stroke instead of being discarded.
+    pad_center = scratchpad.mapToScene(scratchpad.boundingRect().center()).toPoint()
+    QTest.mouseClick(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(pad_center))
+    app.processEvents()
+    dot_strokes = scratchpad.property("strokes")
+    if hasattr(dot_strokes, "toVariant"):
+        dot_strokes = dot_strokes.toVariant()
+    dot_ok = len(dot_strokes) == 1 and len(dot_strokes[0]) == 1
+    print(f"dot stroke registered: {dot_ok}")
+    QMetaObject.invokeMethod(scratchpad, "clearInk")
+    app.processEvents()
+
     strokes = make_hi_strokes(scratchpad.width(), scratchpad.height())
     scratchpad.setProperty("strokes", strokes)
     app.processEvents()
@@ -125,22 +138,65 @@ def main() -> int:
     print(f"status: {status}")
     print(f"question_read: {question!r}")
     print(f"answer ({len(answer)} chars, {len(pages) if pages else 0} page(s)): {answer[:400]}")
+    # Multi-page answers must open on the first page, not follow the stream.
+    first_page_ok = answer_view.property("currentPage") == 0
+    print(f"current page: {answer_view.property('currentPage') + 1} (expect 1)")
 
     # Open the history overlay and verify it shows this conversation.
+    root.setProperty("moreOpen", True)  # History lives behind the More toggle
     history_button = root.findChild(object, "historyButton")
     history_view = root.findChild(object, "historyView")
-    center = history_button.mapToScene(history_button.boundingRect().center()).toPoint()
+    # The positioner needs more than one event-loop pass to place the newly
+    # visible More rows; click only once the button's position stabilizes.
+    center = prev = None
+    for _ in range(50):
+        app.processEvents()
+        center = history_button.mapToScene(history_button.boundingRect().center()).toPoint()
+        if prev is not None and center == prev:
+            break
+        prev = center
+        time.sleep(0.02)
     QTest.mouseClick(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(center))
     history_deadline = time.monotonic() + 15
     while time.monotonic() < history_deadline and not history_view.property("visible"):
         app.processEvents()
         time.sleep(0.1)
-    history_text = history_view.property("historyText") or ""
-    history_ok = history_view.property("visible") and question in history_text
+    questions = history_view.property("questionsText") or ""
+    history_ok = history_view.property("visible") and question in questions
     print(f"history overlay: visible={bool(history_view.property('visible'))}, "
-          f"{len(history_text)} chars, contains question: {question in history_text}")
+          f"{history_view.property('questionCount')} question(s), "
+          f"contains question: {question in questions}")
 
-    ok = bool(answer) and not str(status).startswith("Error") and history_ok
+    # Tap the newest question row; its full answer must open in the detail view.
+    # Repeater delegates live in the visual tree, not the QObject child tree,
+    # so walk childItems() instead of findChildren(). Headers carry a hidden
+    # row MouseArea: keep visible ones only.
+    def visual_items(item):
+        for ch in item.childItems():
+            yield ch
+            yield from visual_items(ch)
+
+    detail_ok = False
+    if history_ok:
+        rows = [c for c in visual_items(history_view)
+                if c.objectName().startswith("historyRow") and c.isVisible()]
+        rows.sort(key=lambda c: int(c.objectName()[len("historyRow"):]))
+        center = prev = None
+        for _ in range(50):
+            app.processEvents()
+            center = rows[0].mapToScene(rows[0].boundingRect().center()).toPoint()
+            if prev is not None and center == prev:
+                break
+            prev = center
+            time.sleep(0.02)
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(center))
+        app.processEvents()
+        detail = history_view.property("detailText") or ""
+        detail_ok = question in detail and answer[:80] in detail
+        print(f"history detail: {len(detail)} chars, contains question+answer: {detail_ok}")
+
+    ok = (bool(answer) and not str(status).startswith("Error")
+          and history_ok and detail_ok and first_page_ok and dot_ok)
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

@@ -78,10 +78,14 @@ def _transcribe_provider():
 
 
 def _doc_info(doc: documents.Document) -> dict:
+    pdf_page = documents.pdf_page_index(doc.content, doc.page_index)
     return {
         "doc_id": doc.doc_id,
         "title": doc.title,
         "page": doc.page_index,
+        # 1-based pdf page, the same numbering history turns record; the
+        # panel's "This page" history filter compares against it.
+        "page_number": pdf_page + 1 if pdf_page >= 0 else None,
         "n_pages": doc.n_pages,
         "has_pdf": doc.pdf_path is not None,
     }

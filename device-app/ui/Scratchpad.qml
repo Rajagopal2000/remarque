@@ -32,9 +32,11 @@ Rectangle {
     }
 
     // Strokes as [[x, y], ...] lists for the /api/ask payload.
+    // Single-point strokes are kept: i-dots, periods and short cursive entry
+    // taps are real ink (the server rasterizes them as dots).
     function strokesForJson() {
         var all = strokes.slice();
-        if (current.length > 1)
+        if (current.length > 0)
             all.push(current);
         return all.map(function(stroke) {
             return stroke.map(function(p) { return [p.x, p.y]; });
@@ -61,6 +63,17 @@ Rectangle {
         property bool fullRepaint: true
         property var pending: []   // line segments [x1, y1, x2, y2] not yet drawn
 
+        // A resize reallocates the backing image, which can come up holding
+        // stale frame content; repaint from the stroke lists.
+        onWidthChanged: repaintAll()
+        onHeightChanged: repaintAll()
+
+        function drawDot(ctx, x, y) {
+            ctx.beginPath();
+            ctx.arc(x, y, ctx.lineWidth / 2 + 0.5, 0, 2 * Math.PI);
+            ctx.fillStyle = "black";
+            ctx.fill();
+        }
         function drawSegment(x1, y1, x2, y2) {
             pending.push([x1, y1, x2, y2]);
             var m = 4;
@@ -86,8 +99,12 @@ Rectangle {
                     all.push(pad.current);
                 for (var i = 0; i < all.length; i++) {
                     var pts = all[i];
-                    if (pts.length < 2)
+                    if (pts.length === 0)
                         continue;
+                    if (pts.length === 1) {
+                        drawDot(ctx, pts[0].x, pts[0].y);
+                        continue;
+                    }
                     ctx.beginPath();
                     ctx.moveTo(pts[0].x, pts[0].y);
                     for (var j = 1; j < pts.length; j++)
@@ -97,6 +114,10 @@ Rectangle {
             } else {
                 for (var k = 0; k < pending.length; k++) {
                     var seg = pending[k];
+                    if (seg[0] === seg[2] && seg[1] === seg[3]) {
+                        drawDot(ctx, seg[0], seg[1]);
+                        continue;
+                    }
                     ctx.beginPath();
                     ctx.moveTo(seg[0], seg[1]);
                     ctx.lineTo(seg[2], seg[3]);
@@ -107,27 +128,108 @@ Rectangle {
         }
     }
 
-    MouseArea {
-        anchors.fill: parent
-        onPressed: (mouse) => { pad.current = [{ "x": mouse.x, "y": mouse.y }]; }
-        onPositionChanged: (mouse) => {
-            // Append in place: reassigning the property here would cost an
-            // O(n) array copy plus change notifications at pen input rate.
-            var c = pad.current;
-            var prev = c.length > 0 ? c[c.length - 1] : null;
-            c.push({ "x": mouse.x, "y": mouse.y });
-            if (prev !== null)
-                ink.drawSegment(prev.x, prev.y, mouse.x, mouse.y);
-        }
-        onReleased: {
-            if (pad.current.length > 1) {
-                var s = pad.strokes.slice();
-                s.push(pad.current);
-                pad.strokes = s;
+    // Append a point to the in-flight stroke if it moved at least a pixel
+    // (filters duplicate events).
+    function addPoint(x, y) {
+        var c = current;
+        var prev = c[c.length - 1];
+        var dx = x - prev.x, dy = y - prev.y;
+        if (dx * dx + dy * dy < 1)
+            return;
+        c.push({ "x": x, "y": y });
+        ink.drawSegment(prev.x, prev.y, x, y);
+    }
+
+    // Remove every stroke that passes near (x, y): the Marker's tail eraser.
+    function eraseAt(x, y) {
+        var r = 24;
+        var kept = [];
+        for (var i = 0; i < strokes.length; i++) {
+            var hit = false;
+            var pts = strokes[i];
+            for (var j = 0; j < pts.length; j++) {
+                var dx = pts[j].x - x, dy = pts[j].y - y;
+                if (dx * dx + dy * dy <= r * r) {
+                    hit = true;
+                    break;
+                }
             }
-            pad.current = [];
+            if (!hit)
+                kept.push(pts);
+        }
+        if (kept.length !== strokes.length) {
+            strokes = kept;
+            ink.repaintAll();
         }
     }
+
+    // Erase mode: the pen removes strokes instead of drawing. A panel toggle
+    // drives this; the Marker's tail eraser is indistinguishable from the tip
+    // in a windowed app (verified: no distinct button or pointer type arrives).
+    property bool eraseMode: false
+    onHasInkChanged: if (!hasInk) eraseMode = false
+
+    property double _t0: 0
+    property bool _erasing: false
+
+    function beginStroke(x, y) {
+        _t0 = Date.now();
+        current = [{ "x": x, "y": y }];
+        // Ink from the very first event: a fast cursive entry stroke gets
+        // its start point on screen before the first move arrives.
+        ink.drawSegment(x, y, x, y);
+    }
+
+    function endStroke(src) {
+        if (current.length > 0) {
+            var s = strokes.slice();
+            s.push(current);
+            strokes = s;
+            // firstGap: distance between the press point and the first move.
+            // The device consistently shows ~20px here via the mouse path:
+            // the input pipeline eats the start of every stroke.
+            var pts = s[s.length - 1];
+            var gap = 0;
+            if (pts.length > 1) {
+                var dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+                gap = Math.sqrt(dx * dx + dy * dy);
+            }
+            console.log("remarque ink[" + src + "]: pts=" + pts.length
+                        + " ms=" + (Date.now() - _t0)
+                        + " firstGap=" + gap.toFixed(1));
+        }
+        current = [];
+    }
+
+    // Capture: the pen tip as synthesized mouse events, full digitizer rate
+    // (the first ~20px of each stroke are lost upstream in xochitl's input
+    // pipeline; verified unavoidable - the pen never arrives as touch or
+    // stylus events, so no alternative backend sees more).
+    MouseArea {
+        anchors.fill: parent
+        onPressed: (mouse) => {
+            if (pad.eraseMode) {
+                pad._erasing = true;
+                pad.eraseAt(mouse.x, mouse.y);
+                return;
+            }
+            pad.beginStroke(mouse.x, mouse.y);
+        }
+        onPositionChanged: (mouse) => {
+            if (pad._erasing)
+                pad.eraseAt(mouse.x, mouse.y);
+            else if (pad.current.length > 0)
+                pad.addPoint(mouse.x, mouse.y);
+        }
+        onReleased: {
+            if (pad._erasing) {
+                pad._erasing = false;
+                return;
+            }
+            pad.endStroke("mouse");
+        }
+    }
+
 
     // Lowest-latency e-ink waveform while writing (UFast trades ink quality
     // for the response time native inking gets).

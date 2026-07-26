@@ -193,6 +193,14 @@ def test_refresh_warms_session_and_ask_resumes_it(env):
     assert len([c for c in provider.calls if "No question yet" in c["prompt"]]) == 1
 
 
+def test_refresh_reports_current_page_number(env):
+    client, provider, main, doc_id = env
+    resp = client.post("/api/refresh")
+    assert resp.status_code == 200
+    # 1-based pdf page, same numbering the history turns record.
+    assert resp.json()["page_number"] == 1
+
+
 def test_refresh_degrades_to_cached_data_when_sync_fails(env, monkeypatch):
     from app import main
 

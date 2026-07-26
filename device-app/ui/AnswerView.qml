@@ -44,9 +44,8 @@ Rectangle {
             result.push(remaining.substring(0, cut));
             remaining = remaining.substring(cut).replace(/^\s+/, "");
         }
-        var wasLast = currentPage >= pages.length - 1;
         pages = result;
-        if (wasLast || currentPage >= pages.length)
+        if (currentPage >= pages.length)
             currentPage = pages.length - 1;
     }
 
