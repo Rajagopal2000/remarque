@@ -106,6 +106,18 @@ def test_render_strokes_produces_png():
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_smooth_interpolates_and_preserves_endpoints():
+    from app.inkrender import _smooth
+
+    pts = [(0.0, 0.0), (10.0, 10.0), (20.0, 0.0)]
+    out = _smooth(pts)
+    assert out[0] == pts[0] and out[-1] == pts[-1]
+    assert len(out) > len(pts)
+    # Short strokes pass through untouched.
+    assert _smooth(pts[:2]) == pts[:2]
+    assert _smooth(pts[:1]) == pts[:1]
+
+
 def test_render_strokes_rejects_empty_ink():
     with pytest.raises(ValueError):
         render_strokes([[]], 200, 150)

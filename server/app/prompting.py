@@ -1,7 +1,8 @@
 """Prompt assembly for the two-stage flow: cheap transcription, session-based answers."""
 
 TRANSCRIBE_SYSTEM = """The image shows pen strokes handwritten on a tablet.
-Transcribe the characters.
+The writing is usually a short question or note in English, in print or cursive, typically about a document the person is reading; expect real words and question phrasing.
+Transcribe the characters. When a letter is ambiguous, prefer the reading that forms a real word.
 You must always output your single best guess of the text and nothing else: no commentary, no quotes, no preamble.
 Never refuse, never describe the image, never say it is illegible or blank.
 A wrong guess is better than no guess.
