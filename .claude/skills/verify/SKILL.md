@@ -32,9 +32,11 @@ description: E2E-verify Remarque changes on a Mac without the tablet - local ser
 
 ## Gotchas
 
-- `server/.env` has `RM_HOST=192.0.2.1` (placeholder): syncs fail in ~3s (ssh ConnectTimeout=3)
-  and degrade to cached data with `sync_error` set - this is the expected offline behavior,
-  not breakage.
+- `server/.env` now has the real `RM_HOST=10.11.99.1`: if the tablet is connected over USB,
+  the "isolated" server rsyncs the entire real tablet library into `$DATA/xochitl` (slow first
+  sync, ~2.7GB) and the last-opened doc is the real one, not your seeded doc. Unplug the tablet
+  or export `RM_HOST=192.0.2.1` for a truly offline run (syncs then fail in ~3s and degrade to
+  cached data with `sync_error` set - expected, not breakage).
 - `/api` routes 401 without the token; `/healthz` and `/metrics` are open.
 - Asks cost real LLM calls (transcribe + answer) against the claude.ai subscription; refresh
   also triggers a one-time background session warm-up (one seed call per document).
